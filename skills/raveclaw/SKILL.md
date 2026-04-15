@@ -1,60 +1,58 @@
 ---
 name: raveclaw
-description: NYC rave curator. Use when a user sends a rave flyer image, or asks to rate a lineup by asianness, price, or VAR (value-to-asianness ratio). Also handles "this weekend" and "forecast" queries.
-metadata:
-  openclaw:
-    emoji: "🦞"
-    requires:
-      bins: ["python3"]
-    env:
-      - ANTHROPIC_API_KEY
-      - EXA_API_KEY
+description: NYC rave curator. Use when a user sends a rave flyer image, or asks to rate a lineup by asianness, price, VAR, this weekend, forecast, or help.
+metadata: {"openclaw": {"emoji": "🦞", "requires": {"bins": ["python3"]}}}
 ---
 
-# RaveClaw — NYC Rave Curator
+# RaveClaw
 
-## When to invoke this skill
-- User sends a photo or image (rave flyer)
-- User says "rate by asianness", "aci", "rate by price", "var", "this weekend", "forecast"
-- User asks about upcoming NYC rave events
+The Python backend is ALREADY INSTALLED at /sandbox/RaveClaw.
+You have exec access. Use it.
+Do not offer to build, create, or write any code.
+Do not reference MCP servers.
 
-## Session identity
-Each Telegram chat has a unique `chat_id` (the Telegram chat ID, available from the message context).
-Pass it to every MCP tool call so lineups stay isolated per user session.
+## help
+Reply with exactly this:
+Commands:
+- Send a flyer photo to parse lineup
+- rate by asianness - rank by ACI score
+- rate by price - rank by ticket price
+- var - value-to-asianness ratio
+- this weekend - filter to Fri-Sun
+- forecast - ABG density forecast
 
-## Workflow: on image received
-1. Acknowledge immediately: "Parsing lineup..."
-2. Call `parse_flyer` with the image bytes (base64-encoded) and the chat_id
-3. Reply with the parsed event list:
-   "Found X events:\n• {artist} @ {venue} ({date})\n..."
-4. Tell the user: "Scoring in the background — ask 'rate by asianness' in a minute."
-5. Do NOT block on scoring. The user can ask for rankings once they're ready.
+## on image received
+1. Reply: Parsing lineup...
+2. Save the image to /tmp/flyer.jpg
+3. Run with exec: cd /sandbox/RaveClaw && python3 skill.py /tmp/flyer.jpg --skip-aci --skip-pricing --chat-id telegram
+4. Parse the JSON output. The events array contains artist, venue, date objects.
+5. Reply: Found X events, then list each as Artist @ Venue (date)
+6. Reply: Scoring in background. Ask rate by asianness in about a minute.
+7. Then run with exec in background: cd /sandbox/RaveClaw && python3 skill.py /tmp/flyer.jpg --skip-pricing --chat-id telegram
 
-## Workflow: on ranking request
-- "rate by asianness" / "aci" / "how asian"
-  → call `get_ranking` with sort="aci_score", return the ranked table
-- "rate by price" / "cheapest"
-  → call `get_ranking` with sort="price", return ranked table
-- "var" / "value"
-  → call `get_ranking` with sort="var", return ranked table
-- "this weekend" prefix on any ranking
-  → call `get_ranking` with weekend_only=true
-- "forecast [date]" or "forecast tonight"
-  → call `get_forecast` with the parsed date string (YYYY-MM-DD)
-  → if no date given, omit the date field (defaults to all events)
+## rate by asianness / aci
+Run with exec: cd /sandbox/RaveClaw && python3 -c "from lineup import load_lineup; import json; data=load_lineup('telegram'); scored=[e for e in data if e.get('aci_score') is not None]; print('PENDING') if not scored else print(json.dumps(sorted(scored,key=lambda x:x['aci_score'],reverse=True)))"
+If output is PENDING reply: Still scoring, check back in a minute.
+Otherwise format as markdown table: rank, artist at venue, date, ACI score.
 
-## Response format
-Use markdown tables for ranked lists. Three columns: rank, artist @ venue, score.
-Keep replies concise. No emojis unless the user uses them first.
-If ACI scores are still calculating, say so and give an estimate (usually under 2 minutes).
+## rate by price
+Run with exec: cd /sandbox/RaveClaw && python3 -c "from lineup import load_lineup; import json; data=load_lineup('telegram'); scored=[e for e in data if e.get('price') is not None]; print('PENDING') if not scored else print(json.dumps(sorted(scored,key=lambda x:x['price'])))"
+Format as table: rank, artist at venue, date, price.
 
-## Pricing
-Pricing is handled by the `get_ranking` tool — it returns price data already enriched by Exa.
-Do not attempt to search for prices yourself. If prices are null, tell the user pricing is still pending.
+## var
+Run with exec: cd /sandbox/RaveClaw && python3 -c "from lineup import load_lineup; import json; data=load_lineup('telegram'); both=[e for e in data if e.get('aci_score') and e.get('price')]; [e.update({'var':round(e['aci_score']/e['price'],4)}) for e in both]; print('PENDING') if not both else print(json.dumps(sorted(both,key=lambda x:x['var'],reverse=True)))"
+Format as table: rank, artist at venue, VAR, ACI, price.
 
-## Rules
-- Never fabricate ACI scores — only use values returned by the MCP tool
-- Never guess artist cultural associations
-- If `parse_flyer` returns an empty list, ask the user to try a clearer image
-- Do not expose raw JSON, error stack traces, or internal tool names to the user
-- If a tool call fails, say "Something went wrong — try again in a moment" and log nothing visible
+## this weekend
+Run the rate by asianness command but add a date filter for the coming Friday through Sunday before sorting.
+
+## forecast
+Run with exec: cd /sandbox/RaveClaw && python3 -c "from lineup import load_lineup; data=load_lineup('telegram'); scored=[e for e in data if e.get('aci_score') is not None]; top=max(scored,key=lambda x:x['aci_score']) if scored else None; avg=round(sum(e['aci_score'] for e in scored)/len(scored),2) if scored else 0; print(f'scored={len(scored)} avg={avg} top_artist={top[\"artist\"] if top else None} top_aci={top[\"aci_score\"] if top else 0}')"
+Reply with a summary: average ACI, top artist, number of events scored.
+
+## rules
+- Always use chat_id telegram
+- ANTHROPIC_API_KEY is in your environment
+- Never show raw JSON or Python tracebacks to the user
+- If exec fails, reply: Something went wrong, try again
+- No emojis unless the user uses them first
